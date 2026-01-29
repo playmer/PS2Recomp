@@ -1,4 +1,5 @@
 #include "ps2recomp/elf_analyzer.h"
+#include <rabbitizer.h>
 #include <iostream>
 #include <sstream>
 #include <algorithm>
@@ -20,7 +21,6 @@ namespace ps2recomp
         : m_elfPath(elfPath)
     {
         m_elfParser = std::make_unique<ElfParser>(elfPath);
-        m_decoder = std::make_unique<R5900Decoder>();
 
         initializeLibraryFunctions();
     }
@@ -1580,16 +1580,33 @@ namespace ps2recomp
 
             uint32_t rawInstruction = m_elfParser->readWord(addr);
 
-            try
-            {
-                Instruction inst = m_decoder->decodeInstruction(addr, rawInstruction);
-                instructions.push_back(inst);
-            }
-            catch (const std::exception &e)
-            {
-                std::cerr << "Error decoding instruction at " << formatAddress(addr)
-                          << ": " << e.what() << std::endl;
-            }
+            RabbitizerInstruction instr;
+            RabbitizerInstruction_init(&instr, rawInstruction, addr);
+
+            Instruction inst;
+            inst.address = addr;
+            inst.raw = rawInstruction;
+            inst.opcode = RAB_INSTR_GET_opcode(&instr);
+            inst.rs = RAB_INSTR_GET_rs(&instr);
+            inst.rt = RAB_INSTR_GET_rt(&instr);
+            inst.rd = RAB_INSTR_GET_rd(&instr);
+            inst.sa = RAB_INSTR_GET_sa(&instr);
+            inst.function = RAB_INSTR_GET_function(&instr);
+            inst.immediate = RAB_INSTR_GET_immediate(&instr);
+            inst.simmediate = static_cast<uint32_t>(RabbitizerInstruction_getProcessedImmediate(&instr));
+            inst.target = RabbitizerInstruction_getInstrIndexAsVram(&instr);
+            inst.hasDelaySlot = RabbitizerInstruction_hasDelaySlot(&instr);
+            inst.isCall = RabbitizerInstruction_isFunctionCall(&instr);
+            inst.isReturn = RabbitizerInstruction_isReturn(&instr);
+            inst.isBranch = (RabbitizerInstruction_getBranchOffsetGeneric(&instr) != 0) ||
+                            RabbitizerInstruction_isJumptableJump(&instr);
+            inst.isJump = RabbitizerInstruction_isUnconditionalBranch(&instr) ||
+                          RabbitizerInstruction_isJumptableJump(&instr);
+            inst.isMMI = (inst.opcode == OPCODE_MMI);
+            inst.isVU = (inst.opcode == OPCODE_COP2);
+
+            instructions.push_back(inst);
+            RabbitizerInstruction_destroy(&instr);
         }
 
         return instructions;
