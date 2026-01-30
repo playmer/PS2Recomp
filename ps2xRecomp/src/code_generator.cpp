@@ -27,6 +27,39 @@ namespace ps2recomp
 
 namespace ps2recomp
 {
+    static bool isReservedCxxIdentifier(const std::string& name)
+    {
+      if (name.size() >= 2 && name[0] == '_' && name[1] == '_')
+        return true;
+      if (!name.empty() && name[0] == '_' && std::isupper(static_cast<unsigned char>(name[1])))
+        return true;
+      return false;
+    }
+
+    static bool isReservedCxxKeyword(const std::string& name)
+    {
+      return kKeywords.find(name) != kKeywords.end();
+    }
+
+    static std::string sanitizeFunctionName(const std::string& name)
+    {
+      std::string sanitized = name;
+
+      std::replace(sanitized.begin(), sanitized.end(), '.', '_');
+
+      // ugly but will do for now
+      if (sanitized == "main")
+        return "ps2_main";
+
+      if (isReservedCxxKeyword(sanitized))
+        return "ps2_" + sanitized;
+
+      if (!isReservedCxxIdentifier(sanitized))
+        return sanitized;
+
+      return "ps2_" + sanitized;
+    }
+
     CodeGenerator::CodeGenerator(const std::vector<Symbol> &symbols)
     {
       for (auto& symbol : symbols) {
@@ -59,39 +92,6 @@ namespace ps2recomp
         }
 
         return "";
-    }
-
-    static bool isReservedCxxIdentifier(const std::string &name)
-    {
-        if (name.size() >= 2 && name[0] == '_' && name[1] == '_')
-            return true;
-        if (!name.empty() && name[0] == '_' && std::isupper(static_cast<unsigned char>(name[1])))
-            return true;
-        return false;
-    }
-
-    static bool isReservedCxxKeyword(const std::string &name)
-    {
-        return kKeywords.find(name) != kKeywords.end();
-    }
-
-    std::string CodeGenerator::sanitizeFunctionName(const std::string &name)
-    {
-        std::string sanitized = name;
-
-        std::replace(sanitized.begin(), sanitized.end(), '.', '_');
-
-        // ugly but will do for now
-        if (sanitized == "main")
-            return "ps2_main";
-
-        if (isReservedCxxKeyword(sanitized))
-            return "ps2_" + sanitized;
-
-        if (!isReservedCxxIdentifier(sanitized))
-            return sanitized;
-
-        return "ps2_" + sanitized;
     }
 
     std::string CodeGenerator::getGeneratedFunctionName(const Function &function)
