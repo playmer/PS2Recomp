@@ -267,7 +267,13 @@ void sceGsSetDefStoreImage(uint8_t *rdram, R5900Context *ctx,
 }
 
 void sceGsSwapDBuffDc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) {
-  // can we get away with that ? kkkk
+  // Log arguments to understand what the game is passing
+  uint32_t dbuffAddr = getRegU32(ctx, 4);
+  uint32_t frameCounter = getRegU32(ctx, 5);
+  std::cout << "[sceGsSwapDBuffDc] dbuff=0x" << std::hex << dbuffAddr
+            << " frame=" << std::dec << frameCounter << std::endl;
+
+  // can we get away with that ? kkkk - No, apparently not.
   static int cur = 0;
   cur ^= 1;
   setReturnS32(ctx, cur);
@@ -278,6 +284,9 @@ void sceGsSyncPath(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) {
 }
 
 void sceGsSyncV(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) {
+  uint32_t mode = getRegU32(ctx, 4);
+  // std::cout << "[sceGsSyncV] mode=" << mode << std::endl; // Commented out to
+  // avoid spam, or enable if needed
   setReturnS32(ctx, 0);
 }
 

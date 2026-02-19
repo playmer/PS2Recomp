@@ -21,7 +21,6 @@ bool dispatchNumericSyscall(uint32_t syscallNumber, uint8_t *rdram,
                             R5900Context *ctx, PS2Runtime *runtime);
 void TODO(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime,
           uint32_t encodedSyscallId);
-void notifyRuntimeStop();
 } // namespace ps2_syscalls
 
 #endif // PS2_SYSCALLS_H

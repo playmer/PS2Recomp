@@ -600,8 +600,17 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value) {
             }
           }
         }
-        m_ioRegisters[address] &= ~0x100;
       }
+
+      // Diagnostic Log for SIF/Other/VIF1 channels (All except GIF)
+      if (channelBase != 0x1000A000) {
+        std::cout << "[DMA_UNIVERSAL] Channel " << std::hex
+                  << ((channelBase >> 12) & 0xF) << " triggered and Auto-ACKed"
+                  << std::endl;
+      }
+
+      // Auto-clear STR bit for ALL DMA channels (instant completion)
+      m_ioRegisters[address] &= ~0x100;
     }
     return true;
   }

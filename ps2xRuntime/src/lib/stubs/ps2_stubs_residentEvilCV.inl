@@ -212,28 +212,12 @@ void sndr_trans_func(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) {
 }
 
 void sdDrvInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) {
-  constexpr uint32_t kSdrInitAddr = 0x2E9A20u;
-
   static int logCount = 0;
   if (logCount < 8) {
-    std::cout << "ps2_stub sdDrvInit -> SdrInit_0x2e9a20" << std::endl;
+    std::cout << "ps2_stub sdDrvInit (noop)" << std::endl;
     ++logCount;
   }
-
-  if (!runtime || !ctx || !rdram || !runtime->hasFunction(kSdrInitAddr)) {
-    setReturnS32(ctx, 0);
-    return;
-  }
-
-  const uint32_t returnPc = getRegU32(ctx, 31);
-  PS2Runtime::RecompiledFunction sdrInit =
-      runtime->lookupFunction(kSdrInitAddr);
-  ctx->pc = kSdrInitAddr;
-  sdrInit(rdram, ctx, runtime);
-
-  if (ctx->pc == kSdrInitAddr || ctx->pc == 0u) {
-    ctx->pc = returnPc;
-  }
+  setReturnS32(ctx, 0);
 }
 
 void ADXF_LoadPartitionNw(uint8_t *rdram, R5900Context *ctx,

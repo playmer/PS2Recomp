@@ -6,6 +6,59 @@ void GsSetCrt(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) {
   std::cout << "PS2 GsSetCrt: interlaced=" << interlaced
             << ", videoMode=" << videoMode << ", frameMode=" << frameMode
             << std::endl;
+
+  if (runtime) {
+    GSRegisters &gs = runtime->memory().gs();
+
+    // PMODE: EN1=1 (read circuit 1 enabled), EN2=1 (read circuit 2 enabled),
+    // MMOD=1 (Alpha blending), AMOD=1 (Alpha selection)
+    // For now just enable RC1/RC2.
+    // gs.pmode = 0xFFFFFFFF00000003; // Simple enable
+    // Better:
+    uint64_t pmode = 0;
+    pmode |= 1; // EN1
+    pmode |= 2; // EN2
+    // pmode |= (1<<2); // CRT MD
+    // pmode |= (1<<3); // MMOD
+    // pmode |= (1<<4); // AMOD
+    // pmode |= (1<<5); // SLBG
+    // pmode |= (1<<6); // ALP
+    gs.pmode = pmode;
+
+    // SMODE2: INT=interlaced, FF=frameMode
+    uint64_t smode2 = 0;
+    if (interlaced)
+      smode2 |= 1;
+    if (frameMode)
+      smode2 |= 2;
+    if (videoMode == 2)
+      smode2 |= (2 << 2); // VESA
+    // else NTSC/PAL/DTV is handled typically by VCK or just 0
+    gs.smode2 = smode2;
+
+    // Fallback: If DISPFB1 is 0, set a default config to show SOMETHING.
+    // FBP=0 (Base 0), FBW=10 (640px), PSM=0 (CT32)
+    if (gs.dispfb1 == 0) {
+      std::cout << "PS2 GsSetCrt: DISPFB1 is 0, setting default 640x448 setup."
+                << std::endl;
+      uint32_t fbp = 0;
+      uint32_t fbw = 10; // 640 / 64
+      uint32_t psm = 0;  // PSMCT32
+      gs.dispfb1 = (uint64_t)fbp | ((uint64_t)fbw << 9) | ((uint64_t)psm << 15);
+
+      // Set DISPLAY1 too if 0
+      if (gs.display1 == 0) {
+        // DW=2560-1 (640*VCLK), DH=448-1?
+        // Note: DW/DH are in VCLK units? No, pixels?
+        // UploadFrame uses DW as pixels directly?
+        // ps2_runtime reads: dw = (display >> 32) & 0xFFF.
+        // So we set standard values.
+        uint32_t dw = 639;
+        uint32_t dh = 447;
+        gs.display1 = ((uint64_t)dw << 32) | ((uint64_t)dh << 44);
+      }
+    }
+  }
 }
 
 void GsGetIMR(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) {

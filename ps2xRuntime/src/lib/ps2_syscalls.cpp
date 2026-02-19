@@ -36,10 +36,20 @@ std::string translatePs2Path(const char *ps2Path);
 namespace ps2_syscalls {
 #include "syscalls/ps2_syscalls_interrupt.inl"
 #include "syscalls/ps2_syscalls_system.inl"
-void iDeleteSema(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
 
 bool dispatchNumericSyscall(uint32_t syscallNumber, uint8_t *rdram,
                             R5900Context *ctx, PS2Runtime *runtime) {
+  // Log all syscalls for trace (temp debug)
+  // std::cout << "Syscall: 0x" << std::hex << syscallNumber << std::dec <<
+  // std::endl; Use filtered logging to avoid spam if inside loop, but for init
+  // it's fine. Let's log unique syscalls or just all of them for now.
+  static uint32_t lastSyscall = 0xFFFFFFFF;
+  if (syscallNumber != lastSyscall || syscallNumber == 0x7B) {
+    std::cout << "[Syscall] 0x" << std::hex << syscallNumber << std::dec
+              << std::endl;
+    lastSyscall = syscallNumber;
+  }
+
   switch (syscallNumber) {
   case 0x01:
     ResetEE(rdram, ctx, runtime);
@@ -106,7 +116,6 @@ bool dispatchNumericSyscall(uint32_t syscallNumber, uint8_t *rdram,
     ExitDeleteThread(rdram, ctx, runtime);
     return true;
   case 0x25:
-  case static_cast<uint32_t>(-0x26):
     TerminateThread(rdram, ctx, runtime);
     return true;
   case 0x29:
@@ -167,10 +176,8 @@ bool dispatchNumericSyscall(uint32_t syscallNumber, uint8_t *rdram,
     CreateSema(rdram, ctx, runtime);
     return true;
   case 0x41:
-    DeleteSema(rdram, ctx, runtime);
-    return true;
   case static_cast<uint32_t>(-0x49):
-    iDeleteSema(rdram, ctx, runtime);
+    DeleteSema(rdram, ctx, runtime);
     return true;
   case 0x42:
     SignalSema(rdram, ctx, runtime);
@@ -265,24 +272,33 @@ bool dispatchNumericSyscall(uint32_t syscallNumber, uint8_t *rdram,
   case static_cast<uint32_t>(-0x71):
     GsPutIMR(rdram, ctx, runtime);
     return true;
-  case 0x73:
-    SetVSyncFlag(rdram, ctx, runtime);
-    return true;
   case 0x74:
     RegisterExitHandler(rdram, ctx, runtime);
     return true;
-  case 0x76:
-  case static_cast<uint32_t>(-0x76):
-    ps2_stubs::sceSifDmaStat(rdram, ctx, runtime);
+  case 0x83: // ReturnFromException (eret) / Unknown Timer?
+  {
+    // Update v0 to simulate a timer/counter for the loop in sub_0011A598
+    // Start at a high value to avoid underflow in game logic (T - 524)
+    static uint32_t fake_timer = 2000000;
+    fake_timer +=
+        164; // Exact increment to match the offset difference (524-360)
+    SET_GPR_U32(ctx, 2, fake_timer); // Set $v0
+
+    // Clear EXL bit in Status register (bit 1) per eret spec - this re-enables
+    // interrupts
+    ctx->cop0_status &= ~0x2;
+
+    if (ctx->cop0_epc != 0) {
+      ctx->pc = ctx->cop0_epc;
+    } else {
+      // If EPC is 0, we assume this is just a request to leave exception level
+      // (EXL=0). We fall through to the next instruction (handled by returning
+      // true to handleSyscall and NOT changing ctx->pc). std::cout << "Syscall:
+      // eret (0x83) with EPC=0. Clearing EXL and falling through." <<
+      // std::endl;
+    }
     return true;
-  case 0x77:
-  case static_cast<uint32_t>(-0x77):
-    ps2_stubs::sceSifSetDma(rdram, ctx, runtime);
-    return true;
-  case 0x78:
-  case static_cast<uint32_t>(-0x78):
-    ps2_stubs::sceSifSetDChain(rdram, ctx, runtime);
-    return true;
+  }
   case 0x85:
     SetMemoryMode(rdram, ctx, runtime);
     return true;
@@ -296,75 +312,40 @@ bool dispatchNumericSyscall(uint32_t syscallNumber, uint8_t *rdram,
 #include "syscalls/ps2_syscalls_rpc.inl"
 #include "syscalls/ps2_syscalls_thread.inl"
 
-void notifyRuntimeStop() {
-  stopInterruptWorker();
-  {
-    std::lock_guard<std::mutex> lock(g_irq_handler_mutex);
-    g_intcHandlers.clear();
-    g_dmacHandlers.clear();
-    g_nextIntcHandlerId = 1;
-    g_nextDmacHandlerId = 1;
-    g_enabled_intc_mask = 0xFFFFFFFFu;
-    g_enabled_dmac_mask = 0xFFFFFFFFu;
-  }
-  {
-    std::lock_guard<std::mutex> lock(g_vsync_flag_mutex);
-    g_vsync_registration = {};
-    g_vsync_tick_counter = 0u;
-  }
+void checkEvents(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) {
+  static auto last = std::chrono::steady_clock::now();
+  auto now = std::chrono::steady_clock::now();
+  // 60Hz ~ 16ms
+  if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last)
+          .count() > 16) {
+    last = now;
+    // Iterate registered handlers
+    for (auto &pair : g_intcHandlers) {
+      // Cause 2 = VSYNC_START, Cause 3 = VSYNC_END
+      if (pair.second.enabled &&
+          (pair.second.cause == 2 || pair.second.cause == 3)) {
+        // Log for debug (once per sec?) - no, spammy.
+        std::cout << "[INTC] Dispatching VSync handler " << std::hex
+                  << pair.second.handler << std::dec << std::endl;
 
-  std::vector<std::shared_ptr<ThreadInfo>> threads;
-  threads.reserve(32);
-  {
-    std::lock_guard<std::mutex> lock(g_thread_map_mutex);
-    for (const auto &entry : g_threads) {
-      if (entry.second) {
-        threads.push_back(entry.second);
+        // Simulate Exception Entry
+        // 1. Set EPC to current PC
+        ctx->cop0_epc = ctx->pc;
+        // 2. Set Status.EXL = 1 (Exception Level)
+        ctx->cop0_status |= 0x2;
+        // 3. Set Cause (0 = Interrupt)
+        ctx->cop0_cause = (ctx->cop0_cause & ~0x7Cu) | (0 << 2);
+
+        // 4. Jump to Handler
+        ctx->pc = pair.second.handler;
+
+        // 5. Set A0 = argument
+        setRegU32(ctx, 4, pair.second.arg);
+
+        // Only dispatch one interrupt per check
+        return;
       }
     }
   }
-
-  for (const auto &threadInfo : threads) {
-    {
-      std::lock_guard<std::mutex> lock(threadInfo->m);
-      threadInfo->forceRelease = true;
-      threadInfo->terminated = true;
-    }
-    threadInfo->cv.notify_all();
-  }
-
-  std::vector<std::shared_ptr<SemaInfo>> semas;
-  {
-    std::lock_guard<std::mutex> lock(g_sema_map_mutex);
-    semas.reserve(g_semas.size());
-    for (const auto &entry : g_semas) {
-      if (entry.second) {
-        semas.push_back(entry.second);
-      }
-    }
-  }
-  for (const auto &sema : semas) {
-    sema->cv.notify_all();
-  }
-
-  std::vector<std::shared_ptr<EventFlagInfo>> eventFlags;
-  {
-    std::lock_guard<std::mutex> lock(g_event_flag_map_mutex);
-    eventFlags.reserve(g_eventFlags.size());
-    for (const auto &entry : g_eventFlags) {
-      if (entry.second) {
-        eventFlags.push_back(entry.second);
-      }
-    }
-  }
-  for (const auto &eventFlag : eventFlags) {
-    eventFlag->cv.notify_all();
-  }
-
-  {
-    std::lock_guard<std::mutex> lock(g_alarm_mutex);
-    g_alarms.clear();
-  }
-  g_alarm_cv.notify_all();
 }
 } // namespace ps2_syscalls
