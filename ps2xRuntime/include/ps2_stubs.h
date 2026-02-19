@@ -1,21 +1,22 @@
 #ifndef PS2_STUBS_H
 #define PS2_STUBS_H
 
-#include "ps2_runtime.h"
 #include "ps2_call_list.h"
+#include "ps2_runtime.h"
 #include <cstdint>
 
-namespace ps2_stubs
-{
-    #define PS2_DECLARE_STUB(name) void name(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
-    PS2_STUB_LIST(PS2_DECLARE_STUB)
-    #undef PS2_DECLARE_STUB
+namespace ps2_stubs {
+#define PS2_DECLARE_STUB(name)                                                 \
+  void name(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+PS2_STUB_LIST(PS2_DECLARE_STUB)
+#undef PS2_DECLARE_STUB
 
-    void syMalloc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
-    void sndr_trans_func(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+void syMalloc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+void sndr_trans_func(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
 
-    void TODO(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
-    void TODO_NAMED(const char *name, uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
-}
+void TODO(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime);
+void TODO_NAMED(const char *name, uint8_t *rdram, R5900Context *ctx,
+                PS2Runtime *runtime);
+} // namespace ps2_stubs
 
 #endif // PS2_STUBS_H
