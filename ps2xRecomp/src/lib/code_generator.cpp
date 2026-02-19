@@ -649,12 +649,11 @@ namespace ps2recomp
         std::string sanitizedName = getFunctionName(function.start);
         if (sanitizedName.empty())
         {
-            std::stringstream nameBuilder;
-            nameBuilder << "Errorfunc_" << std::hex << function.start;
-            sanitizedName = nameBuilder.str();
+            fmt::format_to(std::back_inserter(buf), "void Errorfunc_{:x}(uint8_t* rdram, R5900Context* ctx, PS2Runtime *runtime) {{\n\n", function.start);
         }
-
-        fmt::format_to(std::back_inserter(buf), "void {}(uint8_t* rdram, R5900Context* ctx, PS2Runtime *runtime) {{\n\n", sanitizedName);
+        else {
+            fmt::format_to(std::back_inserter(buf), "void {}(uint8_t* rdram, R5900Context* ctx, PS2Runtime *runtime) {{\n\n", sanitizedName);
+        }
         fmt::format_to(std::back_inserter(buf), "    ctx->pc = {:#x}u;\n\n", function.start);
 
         for (size_t i = 0; i < instructions.size(); ++i)
@@ -3194,8 +3193,7 @@ namespace ps2recomp
     std::string CodeGenerator::generateFunctionRegistration(const std::vector<Function> &functions,
                                                             const std::map<uint32_t, std::string> &stubs)
     {
-        std::stringstream ss;
-
+        fmt::memory_buffer buf;
         std::unordered_set<uint32_t> registeredAddresses;
         auto emitRegistration = [&](uint32_t address, const std::string &name)
         {
@@ -3204,19 +3202,19 @@ namespace ps2recomp
                 return;
             }
 
-            ss << "    runtime.registerFunction(0x" << std::hex << address << std::dec
-               << ", " << name << ");\n";
+            fmt::format_to(std::back_inserter(buf), "    runtime.registerFunction({:#x}, {});\n", address, name);
         };
 
         // Begin function
-        ss << "#include \"ps2_runtime.h\"\n";
-        ss << "#include \"ps2_recompiled_functions.h\"\n";
-        ss << "#include \"ps2_stubs.h\"\n";
-        ss << "#include \"ps2_recompiled_stubs.h\"//this will give duplicated erros because runtime maybe has it define already, just delete the TODOS ones\n";
-        ss << "#include \"ps2_syscalls.h\"\n\n";
+        buf.append(std::string_view(
+            "#include \"ps2_runtime.h\"\n"
+            "#include \"ps2_recompiled_functions.h\"\n"
+            "#include \"ps2_stubs.h\"\n"
+            "#include \"ps2_recompiled_stubs.h\"//this will give duplicated erros because runtime maybe has it define already, just delete the TODOS ones\n"
+            "#include \"ps2_syscalls.h\"\n\n"));
 
         // Registration function
-        ss << "void registerAllFunctions(PS2Runtime& runtime) {\n";
+        buf.append(std::string_view("void registerAllFunctions(PS2Runtime& runtime) {\n"));
 
         std::vector<std::pair<uint32_t, std::string>> normalFunctions;
         std::vector<std::pair<uint32_t, std::string>> stubFunctions;
@@ -3257,7 +3255,7 @@ namespace ps2recomp
 
         if (m_bootstrapInfo.valid)
         {
-            ss << "    // Register ELF entry function\n";
+            buf.append(std::string_view("    // Register ELF entry function\n"));
             std::string entryTarget = m_bootstrapInfo.entryName;
             if (entryTarget.empty())
             {
@@ -3268,36 +3266,36 @@ namespace ps2recomp
                 throw std::runtime_error("No entry function name available for registration.");
             }
             emitRegistration(m_bootstrapInfo.entry, entryTarget);
-            ss << "\n";
+            buf.push_back('\n');
         }
 
-        ss << "    // Register recompiled functions\n";
+        buf.append(std::string_view("    // Register recompiled functions\n"));
         for (const auto &[first, second] : normalFunctions)
         {
             emitRegistration(first, second);
         }
 
-        ss << "\n    // Register stub functions\n";
-        for (const auto &[first, second] : stubFunctions)
+        buf.append(std::string_view("\n    // Register stub functions\n"));
+        for (const auto& [first, second] : stubFunctions)
         {
             emitRegistration(first, second);
         }
 
-        ss << "\n    // Register system call stubs\n";
-        for (const auto &[first, second] : systemCallFunctions)
+        buf.append(std::string_view("\n    // Register system call stubs\n"));
+        for (const auto& [first, second] : systemCallFunctions)
         {
             emitRegistration(first, second);
         }
 
-        ss << "\n    // Register library stubs\n";
-        for (const auto &[first, second] : libraryFunctions)
+        buf.append(std::string_view("\n    // Register library stubs\n"));
+        for (const auto& [first, second] : libraryFunctions)
         {
             emitRegistration(first, second);
         }
 
-        ss << "}\n";
+        buf.append(std::string_view("}\n"));
 
-        return ss.str();
+        return fmt::to_string(buf);
     }
 
     std::string CodeGenerator::generateJumpTableSwitch(const Instruction &inst, uint32_t tableAddress,
