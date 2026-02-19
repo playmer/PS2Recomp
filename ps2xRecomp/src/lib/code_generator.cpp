@@ -160,14 +160,13 @@ namespace ps2recomp
         return "ps2_" + sanitized;
     }
 
-    std::string CodeGenerator::handleBranchDelaySlots(
+    void CodeGenerator::handleBranchDelaySlots(
+        fmt::memory_buffer &buf,
         const Instruction &branchInst,
         const Instruction &delaySlot,
         const Function &function,
         const std::unordered_set<uint32_t> &internalTargets)
     {
-        std::stringstream ss;
-
         const bool hasValidDelaySlot = !(delaySlot.opcode == OPCODE_SPECIAL &&
                                          delaySlot.function == SPECIAL_SLL &&
                                          delaySlot.rd == 0 &&
@@ -199,29 +198,30 @@ namespace ps2recomp
 
         if (internalTargets.contains(delayPc))
         {
-            ss << fmt::format("    if (ctx->pc == 0x{:X}u) {{\n", delayPc);
+
+            fmt::format_to(std::back_inserter(buf), "    if (ctx->pc == 0x{:X}u) {{\n", delayPc);
 
             if (hasValidDelaySlot)
             {
-                ss << fmt::format("        ctx->pc = 0x{:X}u;\n", delayPc);
-                ss << "        " << delaySlotCode << "\n";
+                fmt::format_to(std::back_inserter(buf), "        ctx->pc = 0x{:X}u;\n", delayPc);
+                fmt::format_to(std::back_inserter(buf), "        {}\n", delaySlotCode);
             }
 
-            ss << fmt::format("        ctx->pc = 0x{:X}u;\n", fallthroughPc);
+            fmt::format_to(std::back_inserter(buf), "        ctx->pc = 0x{:X}u;\n", fallthroughPc);
 
             if (internalTargets.contains(fallthroughPc))
             {
-                ss << fmt::format("        goto label_{:x};\n", fallthroughPc); // label uses lowercase usually, but let's keep consistency. Labels are case insensitive in C but check expectation.
+                fmt::format_to(std::back_inserter(buf), "        goto label_{:x};\n", fallthroughPc); // label uses lowercase usually, but let's keep consistency. Labels are case insensitive in C but check expectation.
             }
             else
             {
-                ss << fmt::format("        goto label_fallthrough_0x{:x};\n", branchPc);
+                fmt::format_to(std::back_inserter(buf), "        goto label_fallthrough_0x{:x};\n", branchPc);
             }
 
-            ss << "    }\n";
+            buf.append(std::string_view("    }\n"));
         }
 
-        ss << fmt::format("    ctx->pc = 0x{:X}u;\n", branchPc);
+        fmt::format_to(std::back_inserter(buf), "    ctx->pc = 0x{:X}u;\n", branchPc);
 
         // -------------------------
         // J / JAL (static jump)
@@ -230,41 +230,41 @@ namespace ps2recomp
         {
             if (branchInst.opcode == OPCODE_JAL)
             {
-                ss << fmt::format("    SET_GPR_U32(ctx, 31, 0x{:X}u);\n", fallthroughPc);
+                fmt::format_to(std::back_inserter(buf), "    SET_GPR_U32(ctx, 31, 0x{:X}u);\n", fallthroughPc);
             }
 
             if (hasValidDelaySlot)
             {
-                ss << fmt::format("    ctx->pc = 0x{:X}u;\n", delayPc);
-                ss << "    " << delaySlotCode << "\n";
+                fmt::format_to(std::back_inserter(buf), "    ctx->pc = 0x{:X}u;\n", delayPc);
+                fmt::format_to(std::back_inserter(buf), "    {}\n", delaySlotCode);
             }
 
             const uint32_t target = buildAbsoluteJumpTarget(branchInst.address, branchInst.target);
 
             if (internalTargets.contains(target))
             {
-                ss << fmt::format("    ctx->pc = 0x{:X}u;\n", target);
-                ss << fmt::format("    goto label_{:x};\n", target);
+                fmt::format_to(std::back_inserter(buf), "    ctx->pc = 0x{:X}u;\n", target);
+                fmt::format_to(std::back_inserter(buf), "    goto label_{:x};\n", target);
             }
             else
             {
                 std::string funcName = getFunctionName(target);
-                ss << fmt::format("    ctx->pc = 0x{:X}u;\n", target);
+                fmt::format_to(std::back_inserter(buf), "    ctx->pc = 0x{:X}u;\n", target);
 
                 if (!funcName.empty())
                 {
                     if (branchInst.opcode == OPCODE_J)
                     {
-                        ss << "    " << funcName << "(rdram, ctx, runtime); return;\n";
+                        fmt::format_to(std::back_inserter(buf), "    {}(rdram, ctx, runtime); return;\n", funcName);
                     }
                     else
                     {
-                        ss << "    {\n";
-                        ss << "        const uint32_t __entryPc = ctx->pc;\n";
-                        ss << "        " << funcName << "(rdram, ctx, runtime);\n";
-                        ss << fmt::format("        if (ctx->pc == __entryPc) {{ ctx->pc = 0x{:X}u; }}\n", fallthroughPc);
-                        ss << "    }\n";
-                        ss << fmt::format("    if (ctx->pc != 0x{:X}u) {{ return; }}\n", fallthroughPc);
+                        buf.append(std::string_view("    {\n"));
+                        buf.append(std::string_view("        const uint32_t __entryPc = ctx->pc;\n"));
+                        fmt::format_to(std::back_inserter(buf), "        {}(rdram, ctx, runtime);\n", funcName);
+                        fmt::format_to(std::back_inserter(buf), "        if (ctx->pc == __entryPc) {{ ctx->pc = 0x{:X}u; }}\n", fallthroughPc);
+                        buf.append(std::string_view("    }\n"));
+                        fmt::format_to(std::back_inserter(buf), "    if (ctx->pc != 0x{:X}u) {{ return; }}\n", fallthroughPc);
                     }
                 }
                 else
@@ -283,20 +283,18 @@ namespace ps2recomp
                             const bool isSyscall = !resolvedSyscallName.empty();
                             const std::string_view handlerName = isSyscall ? resolvedSyscallName : resolvedStubName;
 
-                            ss << "    {\n";
-                            ss << "        const uint32_t __entryPc = ctx->pc;\n";
-                            ss << "        "
-                               << (isSyscall ? "ps2_syscalls::" : "ps2_stubs::")
-                               << handlerName << "(rdram, ctx, runtime);\n";
-                            ss << "        if (ctx->pc == __entryPc) { ctx->pc = getRegU32(ctx, 31); }\n";
-                            ss << "    }\n";
+                            buf.append(std::string_view("    {\n"));
+                            buf.append(std::string_view("        const uint32_t __entryPc = ctx->pc;\n"));
+                            fmt::format_to(std::back_inserter(buf), "        {}(rdram, ctx, runtime);\n", (isSyscall ? "ps2_syscalls::" : "ps2_stubs::"));
+                            buf.append(std::string_view("        if (ctx->pc == __entryPc) { ctx->pc = getRegU32(ctx, 31); }\n"));
+                            buf.append(std::string_view("    }\n"));
                             if (branchInst.opcode == OPCODE_J)
                             {
-                                ss << "    return;\n";
+                                fmt::format_to(std::back_inserter(buf), "    return;\n");
                             }
                             else
                             {
-                                ss << fmt::format("    if (ctx->pc != 0x{:X}u) {{ return; }}\n", fallthroughPc);
+                                fmt::format_to(std::back_inserter(buf), "    if (ctx->pc != 0x{:X}u) {{ return; }}\n", fallthroughPc);
                             }
                             emittedRelocCall = true;
                         }
@@ -304,20 +302,20 @@ namespace ps2recomp
 
                     if (!emittedRelocCall)
                     {
-                        ss << "    {\n";
-                        ss << fmt::format("        auto targetFn = runtime->lookupFunction(0x{:X}u);\n", target);
-                        ss << "        const uint32_t __entryPc = ctx->pc;\n";
-                        ss << "        targetFn(rdram, ctx, runtime);\n";
+                        buf.append(std::string_view("    {\n"));
+                        fmt::format_to(std::back_inserter(buf), "        auto targetFn = runtime->lookupFunction(0x{:X}u);\n", target);
+                        buf.append(std::string_view("        const uint32_t __entryPc = ctx->pc;\n"));
+                        buf.append(std::string_view("        targetFn(rdram, ctx, runtime);\n"));
                         if (branchInst.opcode == OPCODE_J)
                         {
-                            ss << "        return;\n";
+                            buf.append(std::string_view("        return;\n"));
                         }
                         else
                         {
-                            ss << fmt::format("        if (ctx->pc == __entryPc) {{ ctx->pc = 0x{:X}u; }}\n", fallthroughPc);
-                            ss << fmt::format("        if (ctx->pc != 0x{:X}u) {{ return; }}\n", fallthroughPc);
+                            fmt::format_to(std::back_inserter(buf), "        if (ctx->pc == __entryPc) {{ ctx->pc = 0x{:X}u; }}\n", fallthroughPc);
+                            fmt::format_to(std::back_inserter(buf), "        if (ctx->pc != 0x{:X}u) {{ return; }}\n", fallthroughPc);
                         }
-                        ss << "    }\n";
+                        buf.append(std::string_view("    }\n"));
                     }
                 }
             }
@@ -326,51 +324,51 @@ namespace ps2recomp
         // JR / JALR (register jump)
         // -------------------------
         else if (branchInst.opcode == OPCODE_SPECIAL &&
-                 (branchInst.function == SPECIAL_JR || branchInst.function == SPECIAL_JALR))
+            (branchInst.function == SPECIAL_JR || branchInst.function == SPECIAL_JALR))
         {
-            ss << "    {\n";
-            ss << "        uint32_t jumpTarget = GPR_U32(ctx, " << static_cast<int>(rs_reg) << ");\n";
+            buf.append(std::string_view("    {\n"));
+            fmt::format_to(std::back_inserter(buf), "        uint32_t jumpTarget = GPR_U32(ctx, {});\n", static_cast<int>(rs_reg));
 
             if (branchInst.function == SPECIAL_JALR && rd_reg != 0)
             {
-                ss << fmt::format("        SET_GPR_U32(ctx, {}, 0x{:X}u);\n", rd_reg, fallthroughPc);
+                fmt::format_to(std::back_inserter(buf), "        SET_GPR_U32(ctx, {}, 0x{:X}u);\n", rd_reg, fallthroughPc);
             }
 
             if (hasValidDelaySlot)
             {
-                ss << fmt::format("        ctx->pc = 0x{:X}u;\n", delayPc);
-                ss << "        " << delaySlotCode << "\n";
+                fmt::format_to(std::back_inserter(buf), "        ctx->pc = 0x{:X}u;\n", delayPc);
+                fmt::format_to(std::back_inserter(buf), "        {}\n", delaySlotCode);
             }
 
-            ss << "        ctx->pc = jumpTarget;\n";
+            buf.append(std::string_view("        ctx->pc = jumpTarget;\n"));
 
             if (!sortedInternalTargets.empty())
             {
-                ss << "        switch (jumpTarget) {\n";
+                buf.append(std::string_view("        switch (jumpTarget) {\n"));
                 for (uint32_t t : sortedInternalTargets)
                 {
-                    ss << fmt::format("            case 0x{:X}u: goto label_{:x};\n", t, t);
+                    fmt::format_to(std::back_inserter(buf), "            case 0x{:X}u: goto label_{:x};\n", t, t);
                 }
-                ss << "            default: break;\n";
-                ss << "        }\n";
+                buf.append(std::string_view("            default: break;\n"));
+                buf.append(std::string_view("        }\n"));
             }
 
             if (branchInst.function == SPECIAL_JR)
             {
-                ss << "        return;\n";
+                buf.append(std::string_view("        return;\n"));
             }
             else
             {
-                ss << "        {\n";
-                ss << "            auto targetFn = runtime->lookupFunction(jumpTarget);\n";
-                ss << "            const uint32_t __entryPc = ctx->pc;\n";
-                ss << "            targetFn(rdram, ctx, runtime);\n";
-                ss << fmt::format("            if (ctx->pc == __entryPc) {{ ctx->pc = 0x{:X}u; }}\n", fallthroughPc);
-                ss << fmt::format("            if (ctx->pc != 0x{:X}u) {{ return; }}\n", fallthroughPc);
-                ss << "        }\n";
+                buf.append(std::string_view("        {\n"));
+                buf.append(std::string_view("            auto targetFn = runtime->lookupFunction(jumpTarget);\n"));
+                buf.append(std::string_view("            const uint32_t __entryPc = ctx->pc;\n"));
+                buf.append(std::string_view("            targetFn(rdram, ctx, runtime);\n"));
+                fmt::format_to(std::back_inserter(buf), "            if (ctx->pc == __entryPc) {{ ctx->pc = 0x{:X}u; }}\n", fallthroughPc);
+                fmt::format_to(std::back_inserter(buf), "            if (ctx->pc != 0x{:X}u) {{ return; }}\n", fallthroughPc);
+                buf.append(std::string_view("        }\n"));
             }
 
-            ss << "    }\n";
+            buf.append(std::string_view("    }\n"));
         }
         // -------------------------
         // Conditional Branches
@@ -446,8 +444,8 @@ namespace ps2recomp
                 {
                     const uint8_t bc_cond = branchInst.rt;
                     conditionStr = (bc_cond == COP1_BC_BCF || bc_cond == COP1_BC_BCFL)
-                                       ? "!(ctx->fcr31 & 0x800000)"
-                                       : "(ctx->fcr31 & 0x800000)";
+                        ? "!(ctx->fcr31 & 0x800000)"
+                        : "(ctx->fcr31 & 0x800000)";
                 }
                 break;
             case OPCODE_COP2:
@@ -455,8 +453,8 @@ namespace ps2recomp
                 {
                     const uint8_t bc_cond = branchInst.rt;
                     conditionStr = (bc_cond == COP2_BC_BCF || bc_cond == COP2_BC_BCFL)
-                                       ? "!(ctx->vu0_status & 0x1)"
-                                       : "(ctx->vu0_status & 0x1)";
+                        ? "!(ctx->vu0_status & 0x1)"
+                        : "(ctx->vu0_status & 0x1)";
                 }
                 break;
             default:
@@ -469,92 +467,90 @@ namespace ps2recomp
 
             const bool isLikely =
                 (branchInst.opcode == OPCODE_BEQL || branchInst.opcode == OPCODE_BNEL ||
-                 branchInst.opcode == OPCODE_BLEZL || branchInst.opcode == OPCODE_BGTZL ||
-                 (branchInst.opcode == OPCODE_REGIMM &&
-                  (branchInst.rt == REGIMM_BLTZL || branchInst.rt == REGIMM_BGEZL ||
-                   branchInst.rt == REGIMM_BLTZALL || branchInst.rt == REGIMM_BGEZALL)) ||
-                 (branchInst.opcode == OPCODE_COP1 && branchInst.rs == COP1_BC &&
-                  (branchInst.rt == COP1_BC_BCFL || branchInst.rt == COP1_BC_BCTL)) ||
-                 (branchInst.opcode == OPCODE_COP2 && branchInst.rs == COP2_BC &&
-                  (branchInst.rt == COP2_BC_BCFL || branchInst.rt == COP2_BC_BCTL)));
+                    branchInst.opcode == OPCODE_BLEZL || branchInst.opcode == OPCODE_BGTZL ||
+                    (branchInst.opcode == OPCODE_REGIMM &&
+                        (branchInst.rt == REGIMM_BLTZL || branchInst.rt == REGIMM_BGEZL ||
+                            branchInst.rt == REGIMM_BLTZALL || branchInst.rt == REGIMM_BGEZALL)) ||
+                    (branchInst.opcode == OPCODE_COP1 && branchInst.rs == COP1_BC &&
+                        (branchInst.rt == COP1_BC_BCFL || branchInst.rt == COP1_BC_BCTL)) ||
+                    (branchInst.opcode == OPCODE_COP2 && branchInst.rs == COP2_BC &&
+                        (branchInst.rt == COP2_BC_BCFL || branchInst.rt == COP2_BC_BCTL)));
 
             const std::string branchTakenVar = fmt::format("branch_taken_0x{:x}", branchInst.address);
-            ss << "    {\n";
-            ss << "        const bool " << branchTakenVar << " = (" << conditionStr << ");\n";
+            buf.append(std::string_view("    {\n"));
+            fmt::format_to(std::back_inserter(buf), "        const bool {} = ({});\n", branchTakenVar, conditionStr);
 
             if (isLikely)
             {
-                ss << "        if (" << branchTakenVar << ") {\n";
+                fmt::format_to(std::back_inserter(buf), "        if ({}) {{\n", branchTakenVar);
                 if (!linkCode.empty())
                 {
-                    ss << "            " << linkCode << "\n";
+                    fmt::format_to(std::back_inserter(buf), "            {}\n", linkCode);
                 }
                 if (hasValidDelaySlot)
                 {
-                    ss << fmt::format("            ctx->pc = 0x{:X}u;\n", delayPc);
-                    ss << "            " << delaySlotCode << "\n";
+                    fmt::format_to(std::back_inserter(buf), "            ctx->pc = 0x{:X}u;\n", delayPc);
+                    fmt::format_to(std::back_inserter(buf), "            {}\n", delaySlotCode);
                 }
 
                 if (internalTargets.contains(target))
                 {
-                    ss << fmt::format("            ctx->pc = 0x{:X}u;\n", target);
-                    ss << fmt::format("            goto label_{:x};\n", target);
+                    fmt::format_to(std::back_inserter(buf), "            ctx->pc = 0x{:X}u;\n", target);
+                    fmt::format_to(std::back_inserter(buf), "            goto label_{:x};\n", target);
                 }
                 else
                 {
-                    ss << fmt::format("            ctx->pc = 0x{:X}u;\n", target);
-                    ss << "            return;\n";
+                    fmt::format_to(std::back_inserter(buf), "            ctx->pc = 0x{:X}u;\n", target);
+                    fmt::format_to(std::back_inserter(buf), "            return;\n");
                 }
 
-                ss << "        }\n";
+                buf.append(std::string_view("        }\n"));
             }
             else
             {
                 if (!linkCode.empty())
                 {
-                    ss << "        if (" << branchTakenVar << ") { " << linkCode << " }\n";
+                    fmt::format_to(std::back_inserter(buf), "        if ({}) {{ {} }}\n", branchTakenVar, linkCode);
                 }
 
                 if (hasValidDelaySlot)
                 {
-                    ss << fmt::format("        ctx->pc = 0x{:X}u;\n", delayPc);
-                    ss << "        " << delaySlotCode << "\n";
+                    fmt::format_to(std::back_inserter(buf), "        ctx->pc = 0x{:X}u;\n", delayPc);
+                    fmt::format_to(std::back_inserter(buf), "        {}\n", delaySlotCode);
                 }
 
-                ss << "        if (" << branchTakenVar << ") {\n";
+                fmt::format_to(std::back_inserter(buf), "        if ({}) {{\n", branchTakenVar);
                 if (internalTargets.contains(target))
                 {
-                    ss << fmt::format("            ctx->pc = 0x{:X}u;\n", target);
-                    ss << fmt::format("            goto label_{:x};\n", target);
+                    fmt::format_to(std::back_inserter(buf), "            ctx->pc = 0x{:X}u;\n", target);
+                    fmt::format_to(std::back_inserter(buf), "            goto label_{:x};\n", target);
                 }
                 else
                 {
-                    ss << fmt::format("            ctx->pc = 0x{:X}u;\n", target);
-                    ss << "            return;\n";
+                    fmt::format_to(std::back_inserter(buf), "            ctx->pc = 0x{:X}u;\n", target);
+                    buf.append(std::string_view("            return;\n"));
                 }
-                ss << "        }\n";
+                buf.append(std::string_view("        }\n"));
             }
 
-            ss << "    }\n";
+            buf.append(std::string_view("    }\n"));
         }
         else
         {
-            ss << "    " << translateInstruction(branchInst) << "\n";
+            fmt::format_to(std::back_inserter(buf), "    {}\n", translateInstruction(branchInst));
             if (hasValidDelaySlot)
             {
-                ss << fmt::format("    ctx->pc = 0x{:X}u;\n", delayPc);
-                ss << "    " << delaySlotCode << "\n";
+                fmt::format_to(std::back_inserter(buf), "    ctx->pc = 0x{:X}u;\n", delayPc);
+                fmt::format_to(std::back_inserter(buf), "    {}\n", delaySlotCode);
             }
         }
 
         if (internalTargets.contains(delayPc) && !internalTargets.contains(fallthroughPc))
         {
-            ss << fmt::format("label_fallthrough_0x{:x}:\n", branchPc);
+            fmt::format_to(std::back_inserter(buf), "label_fallthrough_0x{:x}:\n", branchPc);
         }
 
-        ss << fmt::format("    ctx->pc = 0x{:X}u;\n", fallthroughPc);
-
-        return ss.str();
+        fmt::format_to(std::back_inserter(buf), "    ctx->pc = 0x{:X}u;\n", fallthroughPc);
     }
 
     CodeGenerator::~CodeGenerator() = default;
@@ -683,7 +679,7 @@ namespace ps2recomp
                         fmt::format_to(std::back_inserter(buf), "label_{:x}:\n", delaySlot.address);
                     }
 
-                    fmt::format_to(std::back_inserter(buf), "{}", handleBranchDelaySlots(inst, delaySlot, function, internalTargets));
+                    handleBranchDelaySlots(buf, inst, delaySlot, function, internalTargets);
 
                     ++i; // Skip delay slot instruction (handled inside branch logic)
                 }

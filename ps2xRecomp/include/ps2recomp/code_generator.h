@@ -7,6 +7,7 @@
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
+#include <fmt/format.h>
 
 namespace ps2recomp
 {
@@ -35,7 +36,7 @@ namespace ps2recomp
 
         std::string generateFunction(const Function &function, const std::vector<Instruction> &instructions, const bool &useHeaders);
         std::string generateFunctionRegistration(const std::vector<Function> &functions, const std::map<uint32_t, std::string> &stubs);
-        std::string handleBranchDelaySlots(const Instruction &branchInst, const Instruction &delaySlot,
+        void handleBranchDelaySlots(fmt::memory_buffer& buf, const Instruction &branchInst, const Instruction &delaySlot,
                                            const Function &function, const std::unordered_set<uint32_t> &internalTargets);
 
         void setRenamedFunctions(const std::unordered_map<uint32_t, std::string> &renames);
