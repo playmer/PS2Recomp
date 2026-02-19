@@ -633,21 +633,22 @@ namespace ps2recomp
         const std::vector<Instruction> &instructions,
         const bool &useHeaders)
     {
-        std::stringstream ss;
+        fmt::memory_buffer buf;
 
         if (useHeaders)
         {
-            ss << "#include \"ps2_runtime_macros.h\"\n";
-            ss << "#include \"ps2_runtime.h\"\n";
-            ss << "#include \"ps2_recompiled_functions.h\"\n";
-            ss << "#include \"ps2_recompiled_stubs.h\"\n\n";
-            ss << "#include \"ps2_syscalls.h\"\n";
-            ss << "#include \"ps2_stubs.h\"\n\n";
+            buf.append(std::string_view(
+                "#include \"ps2_runtime_macros.h\"\n"
+                "#include \"ps2_runtime.h\"\n"
+                "#include \"ps2_recompiled_functions.h\"\n"
+                "#include \"ps2_recompiled_stubs.h\"\n\n"
+                "#include \"ps2_syscalls.h\"\n"
+                "#include \"ps2_stubs.h\"\n\n"));
         }
 
         std::unordered_set<uint32_t> internalTargets = collectInternalBranchTargets(function, instructions);
-        ss << "// Function: " << function.name << "\n";
-        ss << "// Address: 0x" << std::hex << function.start << " - 0x" << function.end << std::dec << "\n";
+        fmt::format_to(std::back_inserter(buf), "// Function: {}\n", function.name);
+        fmt::format_to(std::back_inserter(buf), "// Address: {:#x} - {:#x}\n", function.start, function.end);
 
         std::string sanitizedName = getFunctionName(function.start);
         if (sanitizedName.empty())
@@ -657,10 +658,8 @@ namespace ps2recomp
             sanitizedName = nameBuilder.str();
         }
 
-        ss << "void " << sanitizedName << "(uint8_t* rdram, R5900Context* ctx, PS2Runtime *runtime) {\n\n";
-        ss << "    ctx->pc = 0x" << std::hex << function.start << "u;\n"
-           << std::dec;
-        ss << "\n";
+        fmt::format_to(std::back_inserter(buf), "void {}(uint8_t* rdram, R5900Context* ctx, PS2Runtime *runtime) {{\n\n", sanitizedName);
+        fmt::format_to(std::back_inserter(buf), "    ctx->pc = {:#x}u;\n\n", function.start);
 
         for (size_t i = 0; i < instructions.size(); ++i)
         {
@@ -668,37 +667,36 @@ namespace ps2recomp
 
             if (internalTargets.contains(inst.address))
             {
-                ss << "label_" << std::hex << inst.address << std::dec << ":\n";
+                fmt::format_to(std::back_inserter(buf), "label_{:x}:\n", inst.address);
             }
 
-            ss << "    // 0x" << std::hex << inst.address << ": 0x" << inst.raw << std::dec << "\n";
+            fmt::format_to(std::back_inserter(buf), "    // {:#x}: {:#x}\n", inst.address, inst.raw);
 
             try
             {
                 if (inst.hasDelaySlot && i + 1 < instructions.size())
                 {
-                    const Instruction &delaySlot = instructions[i + 1];
+                    const Instruction& delaySlot = instructions[i + 1];
 
                     if (internalTargets.contains(delaySlot.address))
                     {
-                        ss << "label_" << std::hex << delaySlot.address << std::dec << ":\n";
+                        fmt::format_to(std::back_inserter(buf), "label_{:x}:\n", delaySlot.address);
                     }
 
-                    ss << handleBranchDelaySlots(inst, delaySlot, function, internalTargets);
+                    fmt::format_to(std::back_inserter(buf), "{}", handleBranchDelaySlots(inst, delaySlot, function, internalTargets));
 
                     ++i; // Skip delay slot instruction (handled inside branch logic)
                 }
                 else
                 {
-                    ss << "    ctx->pc = 0x" << std::hex << inst.address << "u;\n"
-                       << std::dec;
+                    fmt::format_to(std::back_inserter(buf), "    ctx->pc = {:#x}u;\n", inst.address);
+                    fmt::format_to(std::back_inserter(buf), "    {}", translateInstruction(inst));
 
-                    ss << "    " << translateInstruction(inst);
                     if (inst.isMmio)
                     {
-                        ss << " // MMIO: 0x" << std::hex << inst.mmioAddress << std::dec;
+                        fmt::format_to(std::back_inserter(buf), " // MMIO: {:#x}", inst.mmioAddress);
                     }
-                    ss << "\n";
+                    buf.push_back('\n');
                 }
             }
             catch (const std::exception &e)
@@ -714,8 +712,9 @@ namespace ps2recomp
             }
         }
 
-        ss << "}\n";
-        return ss.str();
+        buf.append(std::string_view("}\n"));
+        
+        return fmt::to_string(buf);
     }
 
     std::string CodeGenerator::translateInstruction(const Instruction &inst)
